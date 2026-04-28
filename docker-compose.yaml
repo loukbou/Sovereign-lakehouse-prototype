@@ -15,6 +15,7 @@ services:
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
       CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+  
   kafka2:
     image: confluentinc/cp-kafka:7.6.1
     container_name: kafka2
@@ -29,6 +30,7 @@ services:
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
       CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+  
   kafka3:
     image: confluentinc/cp-kafka:7.6.1
     container_name: kafka3
@@ -43,6 +45,7 @@ services:
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
       CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk  
+  
   kafka-ui:
     image: provectuslabs/kafka-ui:latest
     container_name: kafka-ui
@@ -104,3 +107,39 @@ services:
       /opt/spark/bin/spark-class
       org.apache.spark.deploy.worker.Worker
       spark://spark-master:7077
+    
+  sales-producer:
+    build:
+      context: ./producers
+    container_name: sales-producer
+    environment:
+      PRODUCER_CONFIG: configs/sales.yml
+    depends_on:
+      - kafka1
+      - kafka2
+      - kafka3
+    restart: unless-stopped
+    
+  logistics-producer:
+    build:
+      context: ./producers
+    container_name: logistics-producer
+    environment:
+      PRODUCER_CONFIG: configs/logistics.yml
+    depends_on:
+      - kafka1
+      - kafka2
+      - kafka3
+    restart: unless-stopped
+
+  sensors-producer:
+    build:
+      context: ./producers
+    container_name: sensors-producer
+    environment:
+      PRODUCER_CONFIG: configs/sensors.yml
+    depends_on:
+      - kafka1
+      - kafka2
+      - kafka3
+    restart: unless-stopped

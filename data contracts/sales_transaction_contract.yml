@@ -1,0 +1,37 @@
+dataset: sales_transactions
+owner: sales_domain
+
+bronze_topic: bronze.sales.transactions
+silver_topic: silver.sales.transactions
+dlq_topic: dlq.sales.transactions
+
+format: json
+schema_type: json_schema
+version: 1.0.0
+
+required_fields:
+  - transaction_id
+  - customer_id
+  - amount
+  - currency
+  - event_time
+
+rules:
+  transaction_id:
+    not_null: true
+
+  customer_id:
+    not_null: true
+
+  amount:
+    type: number
+    min: 0.01
+
+  currency:
+    allowed_values:
+      - MAD
+      - EUR
+      - USD
+
+  event_time:
+    type: timestamp
