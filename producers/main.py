@@ -10,7 +10,7 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s - %(message)s",
 )
 
-CONFIG_PATH = os.environ["PRODUCER_CONFIG"]
+CONFIG_PATH = os.environ["PRODUCER_CONFIG"] # container env.
 
 
 def main():

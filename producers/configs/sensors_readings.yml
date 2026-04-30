@@ -1,0 +1,9 @@
+producer_module: domains.sensors.reading_producer
+
+bootstrap_servers: kafka1:9092,kafka2:9092,kafka3:9092
+schema_registry_url: http://schema-registry:8081
+
+topic: bronze.sensors.readings
+producer_error_topic: producer-errors.sensors.readings
+schema_path: schemas/sensor_reading_event.avsc
+sleep_seconds: 1

@@ -1,0 +1,26 @@
+{
+  "type": "record",
+  "name": "SensorReadingEvent",
+  "namespace": "lakehouse.sensors",
+  "fields": [
+    { "name": "event_id", "type": "string" },
+    { "name": "domain", "type": "string" },
+    { "name": "event_type", "type": "string" },
+    { "name": "produced_at", "type": "string" },
+    {
+      "name": "payload",
+      "type": {
+        "type": "record",
+        "name": "SensorReadingPayload",
+        "fields": [
+          { "name": "reading_id", "type": "string" },
+          { "name": "sensor_id", "type": "string" },
+          { "name": "machine_id", "type": "string" },
+          { "name": "temperature", "type": "double" },
+          { "name": "vibration_level", "type": "double" },
+          { "name": "event_time", "type": "string" }
+        ]
+      }
+    }
+  ]
+}

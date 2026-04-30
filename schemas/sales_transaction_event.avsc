@@ -1,0 +1,61 @@
+{
+  "type": "record",
+  "name": "SalesTransactionEvent",
+  "namespace": "lakehouse.sales",
+  "fields": [
+    {
+      "name": "event_id",
+      "type": "string"
+    },
+    {
+      "name": "domain",
+      "type": "string"
+    },
+    {
+      "name": "event_type",
+      "type": "string"
+    },
+    {
+      "name": "produced_at",
+      "type": "string"
+    },
+    {
+      "name": "payload",
+      "type": {
+        "type": "record",
+        "name": "SalesTransactionPayload",
+        "fields": [
+          {
+            "name": "transaction_id",
+            "type": ["null", "string"],
+            "default": null
+          },
+          {
+            "name": "customer_id",
+            "type": "string"
+          },
+          {
+            "name": "store_id",
+            "type": "string"
+          },
+          {
+            "name": "amount",
+            "type": "double"
+          },
+          {
+            "name": "currency",
+            "type": "string"
+          },
+          {
+            "name": "payment_method",
+            "type": "string"
+          },
+          {
+            "name": "transaction_time",
+            "type": "string"
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "type": "record",
+  "name": "SalesCustomerEvent",
+  "namespace": "lakehouse.sales",
+  "fields": [
+    { "name": "event_id", "type": "string" },
+    { "name": "domain", "type": "string" },
+    { "name": "event_type", "type": "string" },
+    { "name": "produced_at", "type": "string" },
+    {
+      "name": "payload",
+      "type": {
+        "type": "record",
+        "name": "SalesCustomerPayload",
+        "fields": [
+          { "name": "customer_id", "type": ["null", "string"], "default": null },
+          { "name": "full_name", "type": "string" },
+          { "name": "email", "type": ["null", "string"], "default": null },
+          { "name": "city", "type": "string" },
+          { "name": "customer_segment", "type": "string" },
+          { "name": "registration_time", "type": "string" }
+        ]
+      }
+    }
+  ]
+}

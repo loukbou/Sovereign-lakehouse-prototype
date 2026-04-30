@@ -1,6 +1,0 @@
-name: sales-producer
-producer_module: domains.sales.producer
-
-bootstrap_servers: kafka1:9092,kafka2:9092,kafka3:9092
-topic: bronze.sales.transactions
-sleep_seconds: 2

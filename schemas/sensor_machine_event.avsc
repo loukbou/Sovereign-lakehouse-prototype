@@ -1,0 +1,25 @@
+{
+  "type": "record",
+  "name": "SensorMachineEvent",
+  "namespace": "lakehouse.sensors",
+  "fields": [
+    { "name": "event_id", "type": "string" },
+    { "name": "domain", "type": "string" },
+    { "name": "event_type", "type": "string" },
+    { "name": "produced_at", "type": "string" },
+    {
+      "name": "payload",
+      "type": {
+        "type": "record",
+        "name": "SensorMachinePayload",
+        "fields": [
+          { "name": "machine_id", "type": "string" },
+          { "name": "machine_type", "type": "string" },
+          { "name": "site_id", "type": "string" },
+          { "name": "status", "type": "string" },
+          { "name": "installed_at", "type": "string" }
+        ]
+      }
+    }
+  ]
+}

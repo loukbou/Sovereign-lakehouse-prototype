@@ -1,6 +1,0 @@
-name: logistics-producer
-producer_module: domains.logistics.producer
-
-bootstrap_servers: kafka1:9092,kafka2:9092,kafka3:9092
-topic: bronze.logistics.shipments
-sleep_seconds: 2

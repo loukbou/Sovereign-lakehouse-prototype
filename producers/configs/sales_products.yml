@@ -1,0 +1,10 @@
+name: sales-products-producer
+producer_module: domains.sales.products_producer
+
+bootstrap_servers: kafka1:9092,kafka2:9092,kafka3:9092
+schema_registry_url: http://schema-registry:8081
+
+topic: bronze.sales.products
+producer_error_topic: producer-errors.sales.products
+schema_path: schemas/sales_product_event.avsc
+sleep_seconds: 2

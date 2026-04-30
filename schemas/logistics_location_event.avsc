@@ -1,0 +1,25 @@
+{
+  "type": "record",
+  "name": "LogisticsLocationEvent",
+  "namespace": "lakehouse.logistics",
+  "fields": [
+    { "name": "event_id", "type": "string" },
+    { "name": "domain", "type": "string" },
+    { "name": "event_type", "type": "string" },
+    { "name": "produced_at", "type": "string" },
+    {
+      "name": "payload",
+      "type": {
+        "type": "record",
+        "name": "LogisticsLocationPayload",
+        "fields": [
+          { "name": "location_id", "type": "string" },
+          { "name": "city", "type": "string" },
+          { "name": "country", "type": "string" },
+          { "name": "zone_type", "type": "string" },
+          { "name": "updated_at", "type": "string" }
+        ]
+      }
+    }
+  ]
+}
