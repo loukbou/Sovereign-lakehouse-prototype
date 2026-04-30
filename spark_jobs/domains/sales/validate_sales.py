@@ -10,6 +10,8 @@ from pyspark.sql.functions import (
 )
 from pyspark.sql.avro.functions import from_avro
 
+from common.avro_kafka import decode_confluent_avro
+
 
 def run_sales_validation(spark, bootstrap_servers: str):
     with open("/opt/schemas/sales_transaction_event.avsc", "r") as f:
@@ -24,23 +26,7 @@ def run_sales_validation(spark, bootstrap_servers: str):
         .load()
     )
 
-    # Confluent Avro format = 5-byte header + Avro payload
-    # byte 1 = magic byte
-    # bytes 2-5 = schema id
-    # payload starts at byte 6
-    decoded = (
-        bronze
-        .select(
-            col("key").cast("string").alias("kafka_key"),
-            col("value").alias("raw_binary_value"),
-            expr("substring(value, 6, length(value) - 5)").alias("avro_payload")
-        )
-        .select(
-            "kafka_key",
-            "raw_binary_value",
-            from_avro(col("avro_payload"), avro_schema).alias("event")
-        )
-    )
+    decoded = decode_confluent_avro(bronze, avro_schema)
 
     flattened = decoded.select(
         "kafka_key",

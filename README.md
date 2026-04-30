@@ -1,88 +1,94 @@
-# Lakehouse Kafka + Spark Shift-Left Prototype
+# Lakehouse Prototype
+## Overview
 
-im thinking of an ai agent to automate the translation of rules in data contrcat to actual spark jobs, so whe a new data source comes and a new data contracts associated to it, no need to wait for an engineer to undeetand thew data source and schema and rules to make the corresponding sspark job for tranformstion n validation, we could jsut use an agent to do so.
+This project implements a sovereign, open-source lakehouse prototype designed for hybrid batch and streaming ingestio with strong governance.
 
-do we do a one python file for all producers ??
-This prototype simulates the first step toward a sovereign lakehouse:
+The architecture is based on:
 
-Producer → Kafka bronze → Spark validation/transformation → Kafka silver / DLQ
+* **Kafka** for streaming ingestion
+* **Schema Registry** for schema validation and compatibility
+* **Kafka topics as Bronze/Silver persistence layers**
+* **Apache Spark** for transformations and processing
+* **Apache Iceberg** as the table format (future integration)
+* **Ceph Object Storage** as sovereign storage (future integration)
+* **Nessie Catalog** as metadata/control plane (future integration)
 
-Kafka silver is temporary. Later, it will be replaced or complemented by Iceberg tables on Ceph, registered through Nessie.
+The current prototype focuses on validating the ingestion backbone and governance-first pipeline design before integrating full lakehouse persistence.
 
-## 1. Start infrastructure
 
-```bash
-docker compose up -d
-```
-
-Kafka UI:
-
-```text
-http://localhost:8080
-```
-
-## 2. Install Python producer dependencies
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
-## 3. Start producers
-
-Open three terminals:
-
-```bash
-python producers/sales_producer.py
-```
-
-```bash
-python producers/logistics_producer.py
-```
-
-```bash
-python producers/sensor_producer.py
-```
-
-## 4. Start Spark validation job
-
-```bash
-docker exec -it spark spark-submit \
-  --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0 \
-  /opt/spark_jobs/validate_bronze_to_silver.py
-```
-
-## 5. Observe topics in Kafka UI
-
-Bronze topics:
+# Architecture Flow
 
 ```text
-bronze.sales.transactions
-bronze.logistics.shipments
-bronze.sensors.events
-```
+Data Sources
+     ↓
+Kafka Producers
+     ↓
+Schema Registry for schema validation
+     ↓
+Kafka Bronze Topics
+     ↓
+Spark for business rules
+     ↓
+Kafka Silver Topics
 
-Silver topics:
+---
+
+# Current Implemented Components
+
+## 1. Kafka Streaming Backbone
+
+Kafka acts as the ingestion bus.
+
+Each producer publishes domain-specific events.
+
+Example domains:
+
+* sales
+* logistics
+* iot
+
+---
+
+## 2. Schema Registry
+
+Schema Registry ensures:
+
+* Producer payload validation
+* Schema evolution compatibility
+* Strong contracts between producers and consumers
+
+Each Kafka topic has an associated schema.
+
+Example:
 
 ```text
-silver.sales.transactions
-silver.logistics.shipments
-silver.sensors.events
+bronze.sales.customers-value
+bronze.sales.products-value
+bronze.sales.transactions-value
 ```
 
-DLQ topics:
+---
 
-```text
-dlq.sales.transactions
-dlq.logistics.shipments
-dlq.sensors.events
-```
+## 3. Producers
 
-## Interpretation
+Each producer:
 
-- Producers simulate domain systems.
-- Bronze topics represent raw but ingested data.
-- Contracts are stored in `/contracts`.
-- Spark Structured Streaming executes contract rules.
-- Valid records go to silver topics.
-- Invalid records go to DLQ topics.
+1. Generates or reads source data
+2. Validates payload against Avro schema
+3. Serializes payload
+4. Publishes event to Kafka topic
+
+
+# Governance Strategy
+
+Governance is implemented early in the ingestion lifecycle.
+
+Shift-left governance includes:
+
+* Schema validation
+* Data quality checks
+* Topic separation
+* Quarantine topics
+* Versioned contracts
+
+This follows modern shift-left principles for data pipelines, where quality and validation happen near the source rather than downstream.

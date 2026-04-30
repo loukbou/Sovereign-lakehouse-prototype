@@ -1,6 +1,5 @@
-from pyspark.sql.functions import col, current_timestamp, concat_ws, lit, when, to_json, struct, expr
-from pyspark.sql.avro.functions import from_avro
-
+from pyspark.sql.functions import col, current_timestamp, concat_ws, lit, when, to_json, struct
+from common.avro_kafka import decode_confluent_avro
 
 def run_customer_validation(spark, bootstrap_servers: str):
     with open("/opt/schemas/sales_customer_event.avsc", "r") as f:
@@ -15,17 +14,8 @@ def run_customer_validation(spark, bootstrap_servers: str):
         .load()
     )
 
-    decoded = (
-        bronze
-        .select(
-            col("key").cast("string").alias("kafka_key"),
-            expr("substring(value, 6, length(value) - 5)").alias("avro_payload")
-        )
-        .select(
-            "kafka_key",
-            from_avro(col("avro_payload"), avro_schema).alias("event")
-        )
-    )
+    # Use the reusable decode function
+    decoded = decode_confluent_avro(bronze, avro_schema)
 
     flattened = decoded.select(
         "kafka_key",
