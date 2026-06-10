@@ -1,0 +1,18 @@
+contract:
+  name: sensors-alerts
+  version: 1
+
+  kafka_topic: sensors-alerts
+
+  namespace: sensors
+
+  table: alerts
+
+  quarantine_table: alerts_quarantine
+
+  partitioning:
+    - days(event_time)
+
+  owner: iot-team@company.com
+
+  fields:

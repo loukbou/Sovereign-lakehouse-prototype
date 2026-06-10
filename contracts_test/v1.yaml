@@ -1,0 +1,116 @@
+# =============================================================================
+# Data Contract — sensors-alerts v1
+# -----------------------------------------------------------------------------
+# SECTION 1 — Metadata        : filled by the PRODUCER team
+# SECTION 2 — Iceberg targets : filled by the PLATFORM team
+# SECTION 3 — Schema + rules  : filled by the PRODUCER team
+#
+# Versioning: create v2.yaml when schema changes. Never edit a published version.
+# =============================================================================
+
+contract:
+
+  # ── SECTION 1: Metadata ────────────────────────────────────────────────────
+  name:                 sensors-alerts
+  version:              1
+  status:               active          # active | deprecated | draft
+  kafka_topic:          sensors-alerts
+  format:               avro            # avro | json
+  owner:                iot-team@company.com
+  consumers:            [analytics-team, ml-team]
+  max_latency_seconds:  60
+  description: >
+    Real-time sensor alert events from IoT devices across all facilities.
+    Each record represents a threshold breach detected by a sensor.
+
+  # ── SECTION 2: Iceberg targets (platform-owned) ───────────────────────────
+  iceberg_table:        nessie.sensors.alerts
+  quarantine_table:     nessie.sensors.alerts_quarantine
+  checkpoint_path:      s3a://warehouse/checkpoints/sensors-alerts
+
+  # ── SECTION 3: Schema + quality rules ─────────────────────────────────────
+  # nullable: false  → field is REQUIRED (NULL_VIOLATION if missing)
+  # checks:          → list of quality rules applied in order
+  #
+  # Supported check types:
+  #   not_empty        string is non-null and non-blank
+  #   allowed_values   value must be in the provided list
+  #   range            numeric must be between min and max (inclusive)
+  #   range_by_field   conditional range based on another field value
+  #   not_future       timestamp not more than tolerance_seconds in the future
+  #   regex            string must match the provided pattern
+  # ──────────────────────────────────────────────────────────────────────────
+
+  fields:
+
+    - name:     sensor_id
+      type:     string
+      nullable: false
+      description: Unique identifier of the physical sensor device
+      checks:
+        - type: not_empty
+        - type: regex
+          pattern: "^[A-Za-z0-9_-]{3,64}$"
+
+    - name:     sensor_type
+      type:     string
+      nullable: false
+      description: Category of sensor measurement
+      checks:
+        - type: allowed_values
+          values: [temperature, pressure, humidity, vibration, current]
+
+    - name:     location
+      type:     string
+      nullable: true
+      description: Physical location identifier (optional)
+
+    - name:     metric_name
+      type:     string
+      nullable: false
+      description: Name of the measured metric
+      checks:
+        - type: not_empty
+
+    - name:     metric_value
+      type:     double
+      nullable: false
+      description: Numeric measurement value
+      checks:
+        - type: range
+          min: -9999
+          max:  9999
+        - type: range_by_field
+          field: sensor_type
+          ranges:
+            temperature: [-50,   150]
+            pressure:    [  0,  1200]
+            humidity:    [  0,   100]
+            vibration:   [  0,    50]
+            current:     [  0,   500]
+
+    - name:     unit
+      type:     string
+      nullable: true
+      description: Unit of measurement (e.g. Celsius, bar, %)
+
+    - name:     alert_level
+      type:     string
+      nullable: false
+      description: Severity level of the alert
+      checks:
+        - type: allowed_values
+          values: [INFO, WARNING, CRITICAL]
+
+    - name:     alert_message
+      type:     string
+      nullable: true
+      description: Human-readable description of the alert condition
+
+    - name:     event_time
+      type:     timestamp
+      nullable: false
+      description: Time the alert event occurred on the device
+      checks:
+        - type: not_future
+          tolerance_seconds: 300

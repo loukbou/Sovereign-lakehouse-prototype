@@ -1,0 +1,195 @@
+    
+  sales-transactions-producer:
+    build:
+      context: .
+      dockerfile: producers/Dockerfile
+    container_name: sales-transactions-producer
+    environment:
+      PRODUCER_CONFIG: configs/sales_transactions.yml
+    volumes:
+      - ./producers/configs:/app/configs
+      - ./schemas:/app/schemas
+    depends_on:
+      schema-registry:
+        condition: service_healthy
+      kafka1:
+        condition: service_started
+      kafka2:
+        condition: service_started
+      kafka3:
+        condition: service_started
+    restart: unless-stopped
+
+  sales-customers-producer:
+    build:
+      context: .
+      dockerfile: producers/Dockerfile
+    container_name: sales-customers-producer
+    environment:
+      PRODUCER_CONFIG: configs/sales_customers.yml
+    volumes:
+      - ./producers/configs:/app/configs
+      - ./schemas:/app/schemas
+    depends_on:
+      schema-registry:
+        condition: service_healthy
+      kafka1:
+        condition: service_started
+      kafka2:
+        condition: service_started
+      kafka3:
+        condition: service_started
+    restart: unless-stopped
+
+  sales-products-producer:
+    build:
+      context: .
+      dockerfile: producers/Dockerfile
+    container_name: sales-products-producer
+    environment:
+      PRODUCER_CONFIG: configs/sales_products.yml
+    volumes:
+      - ./producers/configs:/app/configs
+      - ./schemas:/app/schemas
+    depends_on:
+      schema-registry:
+        condition: service_healthy
+      kafka1:
+        condition: service_started
+      kafka2:
+        condition: service_started
+      kafka3:
+        condition: service_started
+    restart: unless-stopped
+
+  logistics-shipments-producer:
+    build:
+      context: .
+      dockerfile: producers/Dockerfile
+    container_name: logistics-shipments-producer
+    environment:
+      PRODUCER_CONFIG: configs/logistics_shipments.yml
+    volumes:
+      - ./producers/configs:/app/configs
+      - ./schemas:/app/schemas
+    depends_on:
+      schema-registry:
+        condition: service_healthy
+      kafka1:
+        condition: service_started
+      kafka2:
+        condition: service_started
+      kafka3:
+        condition: service_started
+
+  logistics-vehicles-producer:
+    build:
+      context: .
+      dockerfile: producers/Dockerfile
+    container_name: logistics-vehicles-producer
+    environment:
+      PRODUCER_CONFIG: configs/logistics_vehicles.yml
+    volumes:
+      - ./producers/configs:/app/configs
+      - ./schemas:/app/schemas
+    depends_on:
+      schema-registry:
+        condition: service_healthy
+      kafka1:
+        condition: service_started
+      kafka2:
+        condition: service_started
+      kafka3:
+        condition: service_started
+
+  logistics-locations-producer:
+    build:
+      context: .
+      dockerfile: producers/Dockerfile
+    container_name: logistics-locations-producer
+    environment:
+      PRODUCER_CONFIG: configs/logistics_locations.yml
+    volumes:
+      - ./producers/configs:/app/configs
+      - ./schemas:/app/schemas
+    depends_on:
+      schema-registry:
+        condition: service_healthy
+      kafka1:
+        condition: service_started
+      kafka2:
+        condition: service_started
+      kafka3:
+        condition: service_started
+
+  sensors-readings-producer:
+    build:
+      context: .
+      dockerfile: producers/Dockerfile
+    container_name: sensors-readings-producer
+    environment:
+      PRODUCER_CONFIG: configs/sensors_readings.yml
+    volumes:
+      - ./producers/configs:/app/configs
+      - ./schemas:/app/schemas
+    depends_on:
+      schema-registry:
+        condition: service_healthy
+      kafka1:
+        condition: service_started
+      kafka2:
+        condition: service_started
+      kafka3:
+        condition: service_started
+
+  sensors-machines-producer:
+    build:
+      context: .
+      dockerfile: producers/Dockerfile
+    container_name: sensors-machines-producer
+    environment:
+      PRODUCER_CONFIG: configs/sensors_machines.yml
+    volumes:
+      - ./producers/configs:/app/configs
+      - ./schemas:/app/schemas
+    depends_on:
+      schema-registry:
+        condition: service_healthy
+      kafka1:
+        condition: service_started
+      kafka2:
+        condition: service_started
+      kafka3:
+        condition: service_started
+
+    
+  kafka2:
+    image: confluentinc/cp-kafka:7.6.1
+    container_name: kafka2
+    hostname: kafka2
+    environment:
+      KAFKA_NODE_ID: 2
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka1:9093,2@kafka2:9093,3@kafka3:9093
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka2:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+  
+  kafka3:
+    image: confluentinc/cp-kafka:7.6.1
+    container_name: kafka3
+    hostname: kafka3
+    environment:
+      KAFKA_NODE_ID: 3
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka1:9093,2@kafka2:9093,3@kafka3:9093
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka3:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk  
+  
