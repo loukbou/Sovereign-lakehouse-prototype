@@ -1,160 +1,194 @@
 """
-Generic High-Throughput Shift-Left Governance Streaming Pipeline.
-Fully optimized to run computations natively on distributed worker nodes.
+Shift-Left Governance Streaming Pipeline.
+
+Generic pipeline that:
+  1. Loads the active data contract from Apicurio Registry (once at startup)
+  2. Subscribes to a Kafka topic via Spark Structured Streaming
+  3. Deserializes Avro (via from_avro + Apicurio) or JSON per micro-batch
+  4. Compiles and applies contract quality rules as native Spark expressions
+  5. Routes valid records to the Bronze Iceberg table
+  6. Routes invalid records to the Quarantine Iceberg table
+
+Trigger interval: 30 seconds (configurable via TRIGGER_INTERVAL env var)
+Checkpointing:    Ceph S3 (s3a://) for exactly-once semantics
 """
 
 import os
-from pyspark.sql import SparkSession
-from pyspark.sql import functions as F
-from pyspark.sql.types import (
-    StructType,
-    StructField,
-    StringType,
-    DoubleType,
-    IntegerType,
-    LongType,
-    BooleanType,
-    TimestampType,
-    MapType
-)
+from pyspark.sql import SparkSession, functions as F
+
 from contract_engine import ContractEngine
 
-# ── Cluster Routing Configs ──────────────────────────────────────────────────
-KAFKA_BROKERS    = os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "kafka1:9092,kafka2:9092,kafka3:9092")
-KAFKA_TOPIC      = os.environ.get("KAFKA_TOPIC",             "sensors-alerts")
-CONTRACTS_DIR    = os.environ.get("CONTRACTS_DIR",           "/opt/data_contracts")
-TRIGGER_INTERVAL = os.environ.get("TRIGGER_INTERVAL",        "30 seconds")
+# ── Environment Config ────────────────────────────────────────────────────────
+KAFKA_BROKERS      = os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
+KAFKA_TOPIC        = os.environ.get("KAFKA_TOPIC", "bronze.sensors.alerts")
+TRIGGER_INTERVAL   = os.environ.get("TRIGGER_INTERVAL", "30 seconds")
+APICURIO_URL       = os.environ.get("APICURIO_URL", "http://apicurio:8080")
 
+# Avro deserialization options — points Spark's from_avro() to Apicurio
+AVRO_OPTIONS = {
+    "schema.registry.url": APICURIO_URL,
+    "value.subject.name.strategy": "TopicNameStrategy",
+}
 
-def get_spark_schema_from_contract(engine: ContractEngine) -> StructType:
+def make_batch_processor(engine: ContractEngine, target_schema=None):
+    """
+    Build the foreachBatch handler for the given contract.
+    Captured variables are resolved at construction time to avoid
+    serialization issues inside Spark workers.
+    """
+    iceberg_table    = engine.iceberg_table
+    quarantine_table = engine.quarantine_table
+    engine_version   = engine.version
+    format_type      = engine.format
+    defined_fields   = list(engine._fields.keys())
 
-    type_map = {
-        "string": StringType(),
-        "int": IntegerType(),
-        "integer": IntegerType(),
-        "long": LongType(),
-        "float": DoubleType(),
-        "double": DoubleType(),
-        "boolean": BooleanType(),
-        "timestamp": TimestampType()
-    }
-
-    fields = []
-
-    for field_name, field_def in engine._fields.items():
-
-        spark_type = type_map.get(
-            field_def.get("type", "string").lower(),
-            StringType()
-        )
-
-        fields.append(
-            StructField(
-                field_name,
-                spark_type,
-                field_def.get("nullable", True)
-            )
-        )
-
-    return StructType(fields)
-
-def make_batch_processor(engine: ContractEngine, target_schema: StructType):
-    
-    def process_batch(batch_df, batch_id: int):
+    def process_batch(batch_df, batch_id: int) -> None:
         if batch_df.isEmpty():
             return
 
-        spark = SparkSession.getActiveSession()
         now_ts = F.current_timestamp()
 
-        # 1. Parse string raw payload into explicit columns
-        parsed_df = batch_df.withColumn("parsed_payload", F.from_json(F.col("value_str"), target_schema))
-        
-        # 2. Schema Drift Catch-All: Capture any field inside payload NOT explicitly defined in the contract
-        all_json_map = F.from_json(F.col("value_str"), MapType(StringType(), StringType()))
-        defined_fields = list(engine._fields.keys())
-        
-        # Drop contract-defined keys out of the map to capture only the rogue/drifted fields
-        drift_map = F.map_filter(all_json_map, lambda k, v: ~k.isin(defined_fields))
-
-        # 3. Apply compiled native expressions check rules
-        validated_df = engine.build_native_validation_df(parsed_df)
-
-        # 4. Project and prepare Main Table Data Structure
-        projected_columns = []
-
-        for field_name in engine._fields.keys():
-
-            projected_columns.append(
-                F.col(f"parsed_payload.{field_name}")
-                .alias(field_name)
+        # ── Step 1: Deserialize + validate ────────────────────────────────────
+        if format_type == "avro":
+            # Avro bytes → parsed_payload struct via Apicurio Schema Registry
+            batch_df = (
+                batch_df
+                .withColumn("raw_payload", F.col("value").cast("string"))
+                .withColumn(
+                    "parsed_payload",
+                    F.from_avro(F.col("value"), KAFKA_TOPIC + "-value", AVRO_OPTIONS)
+                )
             )
 
-        main_df = validated_df.select(
-            *projected_columns,
+        validated_df = engine.build_native_validation_df(batch_df, target_schema)
+
+        # ── Step 2: Flatten fields + append audit columns ─────────────────────
+        projected = [
+            F.col(f"parsed_payload.{f}").alias(f)
+            for f in defined_fields
+        ]
+        enriched_df = validated_df.select(
+            *projected,
             now_ts.alias("ingested_at"),
-            F.lit(engine.version).alias("schema_version"),
+            F.lit(engine_version).alias("schema_version"),
+            F.lit(format_type).alias("source_format"),
             F.col("is_valid"),
             F.col("validation_errors"),
-            drift_map.alias("additional_attributes")
+            F.col("raw_payload"),
         )
-        # 5. Route records natively using Iceberg engine features
-        # Append valid or partially valid records into your primary repository
-        main_df.writeTo(engine.iceberg_table).append()
 
-        # Isolate and route invalid records into Quarantine
+        # ── Step 3: Route valid → Bronze ──────────────────────────────────────
+        valid_df = enriched_df.filter(F.col("is_valid"))
+        if not valid_df.isEmpty():
+            valid_df.writeTo(iceberg_table).append()
+            print(f"[Batch {batch_id}] ✅ {valid_df.count()} valid → {iceberg_table}")
+
+        # ── Step 4: Route invalid → Quarantine ────────────────────────────────
         quarantine_df = (
-        validated_df
-        .filter(~F.col("is_valid"))
-        .select(
-            F.col("value_str").alias("raw_payload"),
-            now_ts.alias("ingested_at"),
-            F.lit(engine.version).alias("schema_version"),
-            F.col("validation_errors")
+            validated_df
+            .filter(~F.col("is_valid"))
+            .select(
+                F.col("raw_payload"),
+                now_ts.alias("ingested_at"),
+                F.lit(engine_version).alias("schema_version"),
+                F.lit(format_type).alias("source_format"),
+                F.col("validation_errors"),
+            )
         )
-        )
-
         if not quarantine_df.isEmpty():
+            quarantine_df.writeTo(quarantine_table).append()
+            print(
+                f"[Batch {batch_id}] ⚠️  {quarantine_df.count()} invalid "
+                f"→ {quarantine_table}"
+            )
 
-            quarantine_df.writeTo(
-                engine.quarantine_table
-            ).append()
+        total = batch_df.count()
+        valid_n = valid_df.count() if not valid_df.isEmpty() else 0
+        inv_n   = quarantine_df.count() if not quarantine_df.isEmpty() else 0
+        print(f"[Batch {batch_id}] Total={total} | Valid={valid_n} | Invalid={inv_n}")
 
-        return process_batch
+    return process_batch
 
-def main():
-    engine = ContractEngine.for_topic(KAFKA_TOPIC, CONTRACTS_DIR)
-    target_schema = get_spark_schema_from_contract(engine)
+
+def main() -> None:
+    # ── Load contract from Apicurio (single HTTP call) ────────────────────────
+    engine = ContractEngine.for_topic(KAFKA_TOPIC)
 
     print("=" * 60)
     for k, v in engine.summary().items():
-        print(f"  {k:<20}: {v}")
+        print(f"  {k:<22}: {v}")
     print("=" * 60)
 
-    spark = (SparkSession.builder
-             .appName(f"streaming-{engine.name}-v{engine.version}")
-             .getOrCreate())
-    spark.sparkContext.setLogLevel("WARN")
-    print(f"KAFKA_TOPIC={KAFKA_TOPIC}")
-    print(f"KAFKA_BROKERS={KAFKA_BROKERS}")
-    # Read binary stream out of Kafka cluster topology
-    raw_df = (spark.readStream
-              .format("kafka")
-              .option("kafka.bootstrap.servers", KAFKA_BROKERS)
-              .option("subscribe",               engine.kafka_topic)
-              .option("startingOffsets",         "latest")
-              .option("failOnDataLoss",          "false")
-              .load()
-              .selectExpr("CAST(value AS STRING) as value_str"))
+    # For JSON-format topics, build StructType from contract fields
+    target_schema = None
+    if engine.format == "json":
+        target_schema = engine.get_spark_schema()
+        print(f"JSON mode: schema built with {len(engine._fields)} fields")
+    else:
+        print("Avro mode: schema enforced by Apicurio Registry")
 
-    # Execute processing micro-batch loops
-    query = (raw_df.writeStream
-             .foreachBatch(make_batch_processor(engine, target_schema))
-             .option("checkpointLocation", engine.checkpoint_path)
-             .trigger(processingTime=TRIGGER_INTERVAL)
-             .start())
-    
+    # ── Build SparkSession ────────────────────────────────────────────────────
+    builder = (
+        SparkSession.builder
+        .appName(f"pipeline-{engine.name}-v{engine.version}")
+        .config("spark.sql.extensions",
+                "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions")
+        .config("spark.sql.defaultCatalog", "nessie")
+        .config("spark.sql.catalog.nessie",
+                "org.apache.iceberg.spark.SparkCatalog")
+        .config("spark.sql.catalog.nessie.catalog-impl",
+                "org.apache.iceberg.nessie.NessieCatalog")
+        .config("spark.sql.catalog.nessie.uri",
+                "http://nessie:19120/api/v2")
+        .config("spark.sql.catalog.nessie.warehouse",
+                "s3a://warehouse/")
+        .config("spark.sql.catalog.nessie.io-impl",
+                "org.apache.iceberg.aws.s3.S3FileIO")
+        .config("spark.sql.catalog.nessie.s3.endpoint",
+                os.environ.get("CEPH_ENDPOINT", "http://192.168.122.246:80"))
+        .config("spark.sql.catalog.nessie.s3.path-style-access", "true")
+        .config("spark.sql.catalog.nessie.s3.access-key-id",
+                os.environ.get("CEPH_ACCESS_KEY", "lakehouse"))
+        .config("spark.sql.catalog.nessie.s3.secret-access-key",
+                os.environ.get("CEPH_SECRET_KEY", "lakehouse123"))
+        .config("spark.sql.catalog.nessie.s3.region",
+                os.environ.get("CEPH_REGION", "lakehouse-zg"))
+        .config("spark.sql.adaptive.enabled", "true")
+        .config("spark.sql.adaptive.coalescePartitions.enabled", "true")
+    )
+
+    if engine.format == "avro":
+        builder = builder.config(
+            "spark.jars.packages",
+            "org.apache.spark:spark-avro_2.12:3.4.0"
+        )
+
+    spark = builder.getOrCreate()
+    spark.sparkContext.setLogLevel("WARN")
+
+    # ── Subscribe to Kafka topic ──────────────────────────────────────────────
+    raw_df = (
+        spark.readStream
+        .format("kafka")
+        .option("kafka.bootstrap.servers", KAFKA_BROKERS)
+        .option("subscribe", KAFKA_TOPIC)
+        .option("startingOffsets", "earliest")
+        .option("failOnDataLoss", "false")
+        .load()
+    )
+
+    # ── Start streaming query ─────────────────────────────────────────────────
+    query = (
+        raw_df.writeStream
+        .foreachBatch(make_batch_processor(engine, target_schema))
+        .option("checkpointLocation", engine.checkpoint_path)
+        .trigger(processingTime=TRIGGER_INTERVAL)
+        .start()
+    )
+
+    print(f"Pipeline running. Topic: {KAFKA_TOPIC} | Trigger: {TRIGGER_INTERVAL}")
     query.awaitTermination()
+
 
 if __name__ == "__main__":
     main()

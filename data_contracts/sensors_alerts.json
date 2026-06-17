@@ -1,0 +1,146 @@
+{
+  "apiVersion": "v3.1.0",
+  "kind": "DataContract",
+  "info": {
+    "title": "Sensor Alerts Contract",
+    "version": "1.0.0",
+    "status": "active",
+    "description": "Governs real-time sensor alert events ingested into the bronze lakehouse layer. Enforces business rules at ingestion time via the ContractEngine (Shift-Left governance)."
+  },
+  "team": {
+    "name": "sensors-team",
+    "owner": "sensors-team@company.com",
+    "domain": "sensors",
+    "contact": {
+      "email": "sensors-team@company.com",
+      "slack": "#data-sensors"
+    }
+  },
+  "roles": [
+    {
+      "role": "producer",
+      "access": "write",
+      "description": "Produces sensor alert events to the Kafka topic"
+    },
+    {
+      "role": "consumer",
+      "access": "read",
+      "description": "Reads certified alert data from the Bronze Iceberg table"
+    },
+    {
+      "role": "data-engineer",
+      "access": "write",
+      "description": "Responsible for pipeline and contract maintenance"
+    }
+  ],
+  "sla": {
+    "availability": "99.9%",
+    "dataFreshness": "30 seconds",
+    "latency": "< 30 seconds end-to-end",
+    "completeness": ">= 99%",
+    "retentionPeriod": "90 days"
+  },
+  "support": {
+    "channel": "#data-sensors",
+    "onCall": "sensors-team@company.com",
+    "runbook": "https://wiki.company.com/data/sensors/alerts-runbook",
+    "ticketing": "https://jira.company.com/projects/SENSORS"
+  },
+  "tags": [
+    "sensors",
+    "alerts",
+    "bronze",
+    "streaming",
+    "governance"
+  ],
+  "kafkaTopic": "bronze.sensors.alerts",
+  "format": "avro",
+  "storage": {
+    "type": "iceberg",
+    "icebergTable": "nessie.bronze.sensors.alerts",
+    "quarantineTable": "nessie.bronze.sensors.alerts_quarantine",
+    "checkpointPath": "s3a://warehouse/checkpoints/bronze_sensors_alerts",
+    "partitioning": [
+      "days(ingested_at)"
+    ]
+  },
+  "schema": {
+    "type": "avro",
+    "fields": [
+      {
+        "name": "alert_id",
+        "type": "string",
+        "nullable": true,
+        "description": "Unique alert identifier (UUID). Nullable — assigned downstream if missing."
+      },
+      {
+        "name": "sensor_id",
+        "type": "string",
+        "nullable": false,
+        "description": "Unique sensor identifier. Required."
+      },
+      {
+        "name": "machine_id",
+        "type": "string",
+        "nullable": true,
+        "description": "Parent machine identifier. Nullable for standalone sensors."
+      },
+      {
+        "name": "severity",
+        "type": "string",
+        "nullable": false,
+        "description": "Alert severity level. Must be a known enumeration value."
+      },
+      {
+        "name": "alert_type",
+        "type": "string",
+        "nullable": false,
+        "description": "Classification of the alert trigger."
+      },
+      {
+        "name": "event_time",
+        "type": "string",
+        "nullable": false,
+        "description": "ISO-8601 UTC timestamp of when the alert was triggered."
+      }
+    ]
+  },
+  "quality": {
+    "description": "Business rule validation applied at ingestion time by the ContractEngine.",
+    "rules": [
+      {
+        "name": "valid-severity",
+        "expr": "severity in ['INFO','WARNING','CRITICAL','EMERGENCY']",
+        "description": "Severity must be a known enumeration value."
+      },
+      {
+        "name": "valid-alert-type",
+        "expr": "alert_type in ['OVERHEATING','EXCESSIVE_VIBRATION','POWER_FAILURE','COMMUNICATION_LOSS','THRESHOLD_EXCEEDED']",
+        "description": "Alert type must be a known classification."
+      },
+      {
+        "name": "sensor-id-not-empty",
+        "expr": "has(sensor_id)",
+        "description": "sensor_id is required and must not be null or empty."
+      },
+      {
+        "name": "event-time-not-empty",
+        "expr": "has(event_time)",
+        "description": "event_time is required."
+      },
+      {
+        "name": "event-time-not-future",
+        "expr": "event_time < now()",
+        "description": "event_time must not be in the future."
+      }
+    ]
+  },
+  "lineage": {
+    "producers": [
+      "sensors-alerts-producer"
+    ],
+    "consumers": [
+      "pipeline-sensors-alerts"
+    ]
+  }
+}

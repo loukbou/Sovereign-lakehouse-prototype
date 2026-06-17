@@ -1,7 +1,7 @@
 import logging
 import time
+import uuid
 
-from common.event_envelope import wrap_event
 from common.kafka_client import KafkaProducerClient
 from domains.sales.generator import generate_sales_transaction
 
@@ -29,14 +29,17 @@ def run(config: dict):
 
     while True:
         payload = generate_sales_transaction()
+        
+        # Flatten by merging metadata and payload
+        event = {
+            "domain": "sales",
+            "event_type": "sales_transaction_created",
+            "event_id": str(uuid.uuid4()),
+            "timestamp": int(time.time()),
+            **payload  # Spread all payload fields at root level
+        }
 
-        event = wrap_event(
-            domain="sales",
-            event_type="sales_transaction_created",
-            payload=payload,
-        )
-
-        key = payload.get("transaction_id") or event["event_id"]
+        key = event.get("transaction_id") or event["event_id"]
 
         try:
             kafka.send_avro(topic=topic, key=key, value=event)

@@ -23,6 +23,9 @@ RUN curl --fail -L \
   "https://repo1.maven.org/maven2/org/apache/spark/spark-token-provider-kafka-0-10_2.12/3.5.5/spark-token-provider-kafka-0-10_2.12-3.5.5.jar" \
   -o "/opt/spark/jars/spark-token-provider-kafka-0-10_2.12-3.5.5.jar"
 
+RUN curl --fail -L \
+  "https://repo1.maven.org/maven2/org/apache/commons/commons-pool2/2.11.1/commons-pool2-2.11.1.jar" \
+  -o "/opt/spark/jars/commons-pool2-2.11.1.jar"
 # Iceberg Components (Stable 1.6.1 pairing)
 RUN curl --fail -L \
   "https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-spark-runtime-3.5_2.12/1.6.1/iceberg-spark-runtime-3.5_2.12-1.6.1.jar" \
@@ -53,8 +56,11 @@ RUN chown -R spark:spark /opt/spark/jars
 
 COPY docker/spark-iceberg/spark-defaults.conf /opt/spark/conf/spark-defaults.conf
 
-# Install the missing YAML package globally
-RUN pip install --no-cache-dir pyyaml
+RUN pip install --no-cache-dir \
+    requests==2.32.3 \
+    confluent-kafka==2.4.0 \
+    fastavro==1.9.4 \
+    pyyaml==6.0.1
 
 # Drop back down to the unprivileged spark user safely
 USER spark

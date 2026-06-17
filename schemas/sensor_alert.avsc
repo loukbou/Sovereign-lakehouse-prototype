@@ -1,0 +1,54 @@
+{
+  "type": "record",
+  "name": "SensorAlert",
+  "namespace": "com.lakehouse.sensors",
+  "doc": "Real-time sensor alert event. Produced to bronze.sensors.alerts.",
+  "fields": [
+    {
+      "name": "alert_id",
+      "type": ["null", "string"],
+      "default": null,
+      "doc": "Unique alert identifier (UUID). Nullable — assigned downstream if missing."
+    },
+    {
+      "name": "sensor_id",
+      "type": "string",
+      "doc": "Unique sensor identifier. Required."
+    },
+    {
+      "name": "machine_id",
+      "type": ["null", "string"],
+      "default": null,
+      "doc": "Parent machine identifier. Nullable for standalone sensors."
+    },
+    {
+      "name": "severity",
+      "type": {
+        "type": "enum",
+        "name": "AlertSeverity",
+        "symbols": ["INFO", "WARNING", "CRITICAL", "EMERGENCY"]
+      },
+      "doc": "Alert severity level."
+    },
+    {
+      "name": "alert_type",
+      "type": {
+        "type": "enum",
+        "name": "AlertType",
+        "symbols": [
+          "OVERHEATING",
+          "EXCESSIVE_VIBRATION",
+          "POWER_FAILURE",
+          "COMMUNICATION_LOSS",
+          "THRESHOLD_EXCEEDED"
+        ]
+      },
+      "doc": "Classification of the alert trigger."
+    },
+    {
+      "name": "event_time",
+      "type": "string",
+      "doc": "ISO-8601 UTC timestamp of when the alert was triggered."
+    }
+  ]
+}

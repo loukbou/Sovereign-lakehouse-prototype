@@ -24,43 +24,9 @@ services:
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
-      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka1:9093,2@kafka2:9093,3@kafka3:9093
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka1:9093
       KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka1:9092
-      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
-      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
-      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
-
-  kafka2:
-    image: confluentinc/cp-kafka:7.6.1
-    container_name: kafka2
-    hostname: kafka2
-    environment:
-      KAFKA_NODE_ID: 2
-      KAFKA_PROCESS_ROLES: broker,controller
-      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka1:9093,2@kafka2:9093,3@kafka3:9093
-      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka2:9092
-      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
-      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
-      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
-
-  kafka3:
-    image: confluentinc/cp-kafka:7.6.1
-    container_name: kafka3
-    hostname: kafka3
-    environment:
-      KAFKA_NODE_ID: 3
-      KAFKA_PROCESS_ROLES: broker,controller
-      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka1:9093,2@kafka2:9093,3@kafka3:9093
-      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka3:9092
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
@@ -73,35 +39,52 @@ services:
     container_name: kafka-ui
     depends_on:
       - kafka1
-      - kafka2
-      - kafka3
-      - schema-registry
+      - apicurio
     ports:
-      - "8080:8080"
+      - "8083:8080"
     environment:
-      KAFKA_CLUSTERS_0_NAME: local-distributed-kafka
+      KAFKA_CLUSTERS_0_NAME: local-kafka
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: ${KAFKA_BOOTSTRAP_SERVERS}
       KAFKA_CLUSTERS_0_SCHEMAREGISTRY: ${SCHEMA_REGISTRY_URL}
 
-  schema-registry:
-    image: confluentinc/cp-schema-registry:7.6.1
-    container_name: schema-registry
-    depends_on:
-      - kafka1
-      - kafka2
-      - kafka3
-    ports:
-      - "8081:8081"
+  postgres:
+    image: postgres:16
+    container_name: postgres
+    hostname: postgres
+    environment:
+      POSTGRES_DB: apicurio
+      POSTGRES_USER: apicurio
+      POSTGRES_PASSWORD: apicurio
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8081/subjects"]
+      test: ["CMD-SHELL", "pg_isready -U apicurio -d apicurio"]
       interval: 10s
       timeout: 5s
       retries: 10
-      start_period: 30s
+      start_period: 10s
+
+  apicurio:
+    image: apicurio/apicurio-registry:3.0.13
+    container_name: apicurio
+    ports:
+      - "8080:8080"
     environment:
-      SCHEMA_REGISTRY_HOST_NAME: schema-registry
-      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: PLAINTEXT://kafka1:9092,PLAINTEXT://kafka2:9092,PLAINTEXT://kafka3:9092
-      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+      APICURIO_STORAGE_KIND: sql
+      APICURIO_STORAGE_SQL_KIND: postgresql
+      APICURIO_DATASOURCE_URL: jdbc:postgresql://postgres:5432/apicurio
+      APICURIO_DATASOURCE_USERNAME: apicurio
+      APICURIO_DATASOURCE_PASSWORD: apicurio
+      APICURIO_REST_DELETION_ARTIFACT_ENABLED: "true"
+      APICURIO_REST_DELETION_ARTIFACTVERSION_ENABLED: "true"
+      APICURIO_REST_DELETION_GROUP_ENABLED: "true"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/apis/registry/v3/system/info"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
 
   spark-master:
     build:
@@ -139,22 +122,6 @@ services:
       AWS_ACCESS_KEY_ID: lakehouse
       AWS_SECRET_ACCESS_KEY: lakehouse123
 
-  spark-worker-2:
-    build:
-      context: .
-      dockerfile: docker/spark-iceberg/Dockerfile
-    container_name: spark-worker-2
-    depends_on:
-      - spark-master
-    command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.worker.Worker", "spark://spark-master:7077"]
-    volumes:
-      - ./spark_jobs:/opt/spark_jobs
-      - ./data_contracts:/opt/data_contracts
-    environment:
-      AWS_REGION: lakehouse-zg
-      AWS_ACCESS_KEY_ID: lakehouse
-      AWS_SECRET_ACCESS_KEY: lakehouse123
-
   sensors-alerts-producer:
     build:
       context: .
@@ -166,14 +133,11 @@ services:
       - ./producers/configs:/app/configs
       - ./schemas:/app/schemas
     depends_on:
-      schema-registry:
+      apicurio:
         condition: service_healthy
       kafka1:
         condition: service_started
-      kafka2:
-        condition: service_started
-      kafka3:
-        condition: service_started
+
   sales-transactions-producer:
     build:
       context: .
@@ -185,57 +149,12 @@ services:
       - ./producers/configs:/app/configs
       - ./schemas:/app/schemas
     depends_on:
-      schema-registry:
+      apicurio:
         condition: service_healthy
       kafka1:
-        condition: service_started
-      kafka2:
-        condition: service_started
-      kafka3:
         condition: service_started
     restart: unless-stopped
 
-  sales-customers-producer:
-    build:
-      context: .
-      dockerfile: producers/Dockerfile
-    container_name: sales-customers-producer
-    environment:
-      PRODUCER_CONFIG: configs/sales_customers.yml
-    volumes:
-      - ./producers/configs:/app/configs
-      - ./schemas:/app/schemas
-    depends_on:
-      schema-registry:
-        condition: service_healthy
-      kafka1:
-        condition: service_started
-      kafka2:
-        condition: service_started
-      kafka3:
-        condition: service_started
-    restart: unless-stopped
-
-  sales-products-producer:
-    build:
-      context: .
-      dockerfile: producers/Dockerfile
-    container_name: sales-products-producer
-    environment:
-      PRODUCER_CONFIG: configs/sales_products.yml
-    volumes:
-      - ./producers/configs:/app/configs
-      - ./schemas:/app/schemas
-    depends_on:
-      schema-registry:
-        condition: service_healthy
-      kafka1:
-        condition: service_started
-      kafka2:
-        condition: service_started
-      kafka3:
-        condition: service_started
-    restart: unless-stopped
 networks:
   lakehouse-net:
     driver: bridge

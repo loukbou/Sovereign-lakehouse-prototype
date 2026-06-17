@@ -89,8 +89,7 @@ def generate_iceberg_ddl(engine: ContractEngine) -> tuple:
     """
     
     return main_ddl.strip(), quarantine_ddl.strip()
-
-def provision_all_contracts(contracts_dir: str, kafka_topic: str = None):
+def provision_all_contracts(kafka_topic: str = None):
     """
     Scans data contracts, compiles explicit schemas, and issues
     ACID-compliant table creation DDL commands via the active catalog.
@@ -118,19 +117,38 @@ def provision_all_contracts(contracts_dir: str, kafka_topic: str = None):
     
     try:
         if kafka_topic:
-            # Targets a single newly added contract if filtering by topic
-            engines = [ContractEngine.for_topic(kafka_topic, contracts_dir)]
+            engines = [ContractEngine.for_topic(kafka_topic)]
         else:
-            # Discover and provision every single contract found in the target directory
-            import glob
-            pattern = os.path.join(contracts_dir, "**", "*.yaml")
-            engines = [ContractEngine(path) for path in glob.glob(pattern, recursive=True)]
+            # Discover all registered topics from Apicurio.
+            # Filter to artifactType=JSON only: AVRO entries are schemas
+            # (e.g. "alerts-schema"), not data contracts, and have no
+            # kafkaTopic field, which previously produced an empty
+            # "CREATE NAMESPACE IF NOT EXISTS ." statement.
+            import requests
+            base = f"{os.environ.get('APICURIO_URL', 'http://apicurio:8080')}/apis/registry/v3"
+            resp = requests.get(
+                f"{base}/search/artifacts",
+                params={"limit": 100, "artifactType": "JSON"},
+                timeout=10,
+            )
+            resp.raise_for_status()
+            artifacts = resp.json().get("artifacts", [])
+            engines = []
+            for a in artifacts:
+                group = a["groupId"]
+                artifact = a["artifactId"]
+                # Reconstruct topic: bronze.<group>.<artifact>
+                topic = f"bronze.{group}.{artifact}"
+                try:
+                    engines.append(ContractEngine.for_topic(topic))
+                except Exception as e:
+                    print(f"⚠️ Skipping {group}/{artifact}: {e}")
     except Exception as e:
         print(f"❌ Error loading contract files: {e}")
         sys.exit(1)
 
     if not engines:
-        print(f"⚠️ No contracts found in directory: {contracts_dir}")
+        print(f"⚠️ No contracts found ")
         spark.stop()
         return
 
@@ -140,20 +158,27 @@ def provision_all_contracts(contracts_dir: str, kafka_topic: str = None):
         
         parts = engine.iceberg_table.split(".")
 
-        if len(parts) < 3:
-            raise ValueError(
-                f"Invalid Iceberg identifier: {engine.iceberg_table}"
-            )
+        if len(parts) >= 4:
+            catalog = parts[0]          # nessie
+            zone = parts[1]             # bronze
+            namespace = parts[2]        # sensors
+            table_name = parts[3]       # alerts
+            
+            # Chemin complet du sous-namespace sous la zone (ex: nessie.bronze.sensors)
+            full_namespace = f"{catalog}.{zone}.{namespace}"
+            
+            print(f"📁 Creating hierarchical namespace '{full_namespace}'...")
+            # 1. On crée la zone racine (ex: nessie.bronze)
+            spark.sql(f"CREATE NAMESPACE IF NOT EXISTS {catalog}.{zone}")
+            # 2. On crée le sous-namespace (ex: nessie.bronze.sensors)
+            spark.sql(f"CREATE NAMESPACE IF NOT EXISTS {full_namespace}")
+            
+        else:
+            # Fallback de secours si tu as oublié de mettre la zone dans un autre contrat
+            catalog = parts[0]
+            namespace = ".".join(parts[1:-1])
+            spark.sql(f"CREATE NAMESPACE IF NOT EXISTS {catalog}.{namespace}")
 
-        catalog = parts[0]
-        namespace = ".".join(parts[1:-1])
-
-        spark.sql(
-            f"CREATE NAMESPACE IF NOT EXISTS {catalog}.{namespace}"
-        )
-
-        spark.sql(f"CREATE NAMESPACE IF NOT EXISTS nessie.{namespace}")
-        
         # Execute Main Table Creation
         print(f"🔨 Ensuring Main Iceberg Table exists: {engine.iceberg_table}")
         spark.sql(main_sql)
@@ -161,13 +186,10 @@ def provision_all_contracts(contracts_dir: str, kafka_topic: str = None):
         # Execute Quarantine Table Creation
         print(f"🔨 Ensuring Quarantine Iceberg Table exists: {engine.quarantine_table}")
         spark.sql(quarantine_sql)
-        
+
     print("\n✅ Infrastructure provisioning complete. Spark can safely write to tables.")
     spark.stop()
 
 if __name__ == "__main__":
-    # Fallback paths mapping to your docker environment variables
-    CONTRACTS_DIR = os.environ.get("CONTRACTS_DIR", "/opt/data_contracts")
-    KAFKA_TOPIC = os.environ.get("KAFKA_TOPIC", None) # If None, maps all found contracts
-    
-    provision_all_contracts(CONTRACTS_DIR, KAFKA_TOPIC)
+    KAFKA_TOPIC = os.environ.get("KAFKA_TOPIC", None)
+    provision_all_contracts(KAFKA_TOPIC)
