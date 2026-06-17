@@ -173,10 +173,10 @@ class ContractEngine:
                 "parsed_payload", F.from_json(F.col("raw_payload"), target_schema)
             )
 
-        # Detect which parsed_payload fields are Avro enum structs.
+        # ── Detect which parsed_payload fields are Avro enum structs ──────────
         # from_avro() deserializes Avro enums as nested structs {member: "VALUE"}.
-        # We inspect the actual DataFrame schema at runtime so col() below can
-        # unwrap .member when needed without hardcoding field names.
+        # We inspect the actual DataFrame schema at runtime so the col() accessor
+        # below can unwrap .member when needed — without hardcoding field names.
         avro_struct_fields: set = set()
         try:
             parsed_type = df.schema["parsed_payload"].dataType
@@ -190,9 +190,7 @@ class ContractEngine:
         if avro_struct_fields:
             logger.debug("Avro enum struct fields detected: %s", avro_struct_fields)
 
-        logger.warning("Raw rule expressions from contract:")
-        for rule in self._rules:
-            logger.warning("  name=%r  expr=%r", rule.get("name"), rule.get("expr"))
+        logger.warning("Compiling %d rules for batch", len(self._rules))
 
         validation_exprs = []
         for rule in self._rules:
@@ -201,30 +199,28 @@ class ContractEngine:
             if not expr_str:
                 continue
             spark_expr = self._compile_rule(expr_str, rule_name, avro_struct_fields)
-            logger.warning("Rule [%s] expr=%r -> compiled=%s", rule_name, expr_str, spark_expr is not None)
             if spark_expr is not None:
                 validation_exprs.append(spark_expr)
 
-        logger.warning("Total compiled expressions: %d", len(validation_exprs))
-
         if validation_exprs:
-            # array_remove strips passing (None) entries leaving only violations.
-            # coalesce(..., []) guarantees a real empty array instead of NULL
-            # when all rules pass — F.array_remove returns NULL in some Spark
-            # versions when all elements are stripped, which breaks F.size().
-            error_array = F.coalesce(
-                F.array_remove(F.array(*validation_exprs), None),
-                F.array().cast("array<string>")
-            )
+            # array_remove strips passing (None) entries, leaving only violations.
+            # IMPORTANT: second arg must be a plain Python None literal —
+            # F.lit(None) breaks Py4J array iteration.
+            error_array = F.array_remove(F.array(*validation_exprs), None)
         else:
             error_array = F.array().cast("array<string>")
 
         return (
             df
             .withColumn("validation_errors", error_array)
-            .withColumn("is_valid", F.size(F.col("validation_errors")) == 0)
+            .withColumn(
+                "is_valid",
+                F.coalesce(F.size(F.col("validation_errors")) == 0, F.lit(False)),
+            )
         )
-    
+
+    # ── Rule Compiler ─────────────────────────────────────────────────────────
+
     @staticmethod
     def _null_safe_when(condition, error_message: str):
         """
@@ -242,9 +238,8 @@ class ContractEngine:
         """
         Compile a single quality rule expression into a Spark F.when() Column.
 
-
         Supported CEL-style patterns:
-          field in ['A','B']        → allowed_values
+          field in ['A','B']       → allowed_values
           field > N / field < N     → range check
           field >= N && field <= N  → range band
           has(field)                → not null / not empty
@@ -253,7 +248,6 @@ class ContractEngine:
           field < now()             → not future timestamp
         """
         avro_struct_fields = avro_struct_fields or set()
-
 
         def col(f):
             """
@@ -266,18 +260,15 @@ class ContractEngine:
             raw = F.col(f"parsed_payload.{f}")
             return raw.cast("string") if field_type == "string" else raw
 
-
         # ── allowed_values:  severity in ['INFO','WARNING']
         m = re.match(r"^(\w+)\s+in\s+\[(.+)\]$", expr.strip())
         if m:
             field = m.group(1)
-            # FIX: Properly formatted characters inside strip()
-            vals  = [v.strip().strip("'\"") for v in m.group(2).split(",")]
+            vals  = [v.strip().strip("'"") for v in m.group(2).split(",")]
             return self._null_safe_when(
                 ~col(field).isin(vals),
                 f"ALLOWED_VALUES_VIOLATION [{rule_name}]: '{field}' not in {vals}",
             )
-
 
         # ── range:  amount > 0
         m = re.match(r"^(\w+)\s*([><=!]+)\s*([\d.\-]+)$", expr.strip())
@@ -296,19 +287,16 @@ class ContractEngine:
                     f"RANGE_VIOLATION [{rule_name}]: '{field}' failed '{expr}'",
                 )
 
-
         # ── range band:  amount >= 0 && amount <= 5000
-        # NOTE: Fixed a hidden invisible character bug in your original regex chunk here too
         m = re.match(
-            r"^(\w+)\s*>=\s*([\d.\-]+)\s*&&\s*(\w+)\s*<=\s*([\d.\-]+)$", expr.strip()
+            r"^(\w+)\s*>=\s*([\d.\-]+)\s*&&\s*\s*<=\s*([\d.\-]+)$", expr.strip()
         )
         if m:
-            field, lo, hi = m.group(1), float(m.group(2)), float(m.group(4))
+            field, lo, hi = m.group(1), float(m.group(2)), float(m.group(3))
             return self._null_safe_when(
                 (col(field) < lo) | (col(field) > hi),
                 f"RANGE_VIOLATION [{rule_name}]: '{field}' out of [{lo}, {hi}]",
             )
-
 
         # ── not_empty / not_null:  has(field)  or  field != ''
         m = re.match(r"^has\((\w+)\)$", expr.strip())
@@ -319,9 +307,7 @@ class ContractEngine:
                 f"NOT_EMPTY_VIOLATION [{rule_name}]: '{field}' is null or empty",
             )
 
-
-        # FIX: Wrapped pattern in single quotes to cleanly catch empty single or double strings
-        m = re.match(r'^(\w+)\s*!=\s*[\x27"\x22]{2}\s*$', expr.strip())
+        m = re.match(r"^(\w+)\s*!=\s*['"]['"]\s*$", expr.strip())
         if m:
             field = m.group(1)
             return self._null_safe_when(
@@ -329,16 +315,14 @@ class ContractEngine:
                 f"NOT_EMPTY_VIOLATION [{rule_name}]: '{field}' is empty",
             )
 
-
         # ── regex:  field.matches('pattern')
-        m = re.match(r"^(\w+)\.matches\(['\"](.*?)['\"] \)$", expr.strip())
+        m = re.match(r"^(\w+)\.matches\(['"](.*?)['"]\)$", expr.strip())
         if m:
             field, pattern = m.group(1), m.group(2)
             return self._null_safe_when(
                 ~col(field).rlike(pattern),
                 f"REGEX_VIOLATION [{rule_name}]: '{field}' does not match pattern",
             )
-
 
         # ── not_future (custom extension):  event_time < now()
         if "now()" in expr and "<" in expr:
@@ -350,10 +334,10 @@ class ContractEngine:
                     f"NOT_FUTURE_VIOLATION [{rule_name}]: '{field}' is in the future",
                 )
 
-
         logger.warning("Rule '%s' expression not compiled: '%s'", rule_name, expr)
         return None
-        # ── Helpers ───────────────────────────────────────────────────────────────
+
+    # ── Helpers ───────────────────────────────────────────────────────────────
 
     def get_spark_schema(self) -> StructType:
         """Build a Spark StructType from contract field definitions (JSON mode)."""

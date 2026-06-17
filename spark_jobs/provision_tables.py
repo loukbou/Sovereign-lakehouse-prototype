@@ -37,18 +37,14 @@ def generate_iceberg_ddl(engine: ContractEngine) -> tuple:
     for field_name, field_def in engine._fields.items():
         contract_type = field_def.get("type", "string").lower()
         spark_type = TYPE_MAP.get(contract_type, "STRING")
-        nullable = " " if field_def.get("nullable", True) else " NOT NULL"
+        # Use NOT NULL only when contract explicitly marks nullable: false
+        nullable = "" if field_def.get("nullable", True) else " NOT NULL"
         columns_spec.append(f"  {field_name} {spark_type}{nullable}")
         
     # Append operational audit columns used by your streaming engine
     columns_spec.append("  ingested_at TIMESTAMP")
     columns_spec.append("  schema_version STRING")
-    columns_spec.append("  is_valid BOOLEAN")
-    columns_spec.append("  validation_errors ARRAY<STRING>")
-    
-    # CRITICAL: Schema Drift Catch-All Column. 
-    # Holds any unmapped keys sent by upstream systems in a JSON map.
-    columns_spec.append("  additional_attributes MAP<STRING, STRING>")
+    columns_spec.append("  source_format STRING") 
     partition_clause = ""
 
     if engine.partitioning:

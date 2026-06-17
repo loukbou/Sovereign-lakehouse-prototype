@@ -75,7 +75,31 @@ def make_batch_processor(engine: ContractEngine, target_schema=None):
                 )
             )
         validated_df = engine.build_native_validation_df(batch_df, target_schema)
+        # ── TEMPORARY DEBUG: print validation errors breakdown ────────────────
+        debug_df = validated_df.select(
+            F.col("parsed_payload.severity").alias("severity"),
+            F.col("parsed_payload.alert_type").alias("alert_type"),
+            F.col("parsed_payload.sensor_id").alias("sensor_id"),
+            F.col("parsed_payload.event_time").alias("event_time"),
+            F.col("validation_errors"),
+            F.col("is_valid")
+        )
 
+        print(f"[Batch {batch_id}] === VALIDATION DEBUG ===")
+        debug_df.show(10, truncate=False)
+
+        # Error frequency breakdown — which rules are firing most?
+        print(f"[Batch {batch_id}] === ERROR BREAKDOWN ===")
+        validated_df.select(F.explode(F.col("validation_errors")).alias("error")) \
+            .groupBy("error") \
+            .count() \
+            .orderBy(F.col("count").desc()) \
+            .show(20, truncate=False)
+
+        # Confirm struct vs flat string for severity and alert_type
+        print(f"[Batch {batch_id}] === PARSED_PAYLOAD SCHEMA ===")
+        validated_df.printSchema()
+        # ── END DEBUG ─────────────────────────────────────────────────────────
         projected = [
             F.col(f"parsed_payload.{f}").alias(f)
             for f in defined_fields
@@ -91,10 +115,14 @@ def make_batch_processor(engine: ContractEngine, target_schema=None):
         )
 
         # ── Step 3: Route valid → Bronze ──────────────────────────────────────
-        valid_df = enriched_df.filter(F.col("is_valid"))
+        valid_df = enriched_df.filter(F.col("is_valid")).drop(
+            "is_valid",
+            "validation_errors",
+            "raw_payload",
+            "key", "value", "topic", "partition", "offset", "timestamp", "timestampType"
+        )
         if not valid_df.isEmpty():
             valid_df.writeTo(iceberg_table).append()
-            print(f"[Batch {batch_id}] ✅ {valid_df.count()} valid → {iceberg_table}")
 
         # ── Step 4: Route invalid → Quarantine ────────────────────────────────
         quarantine_df = (
