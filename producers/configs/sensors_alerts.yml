@@ -2,7 +2,10 @@ producer_module: domains.sensors.alert_producer
  
 bootstrap_servers: kafka1:9092
 schema_registry_url: http://apicurio:8080/apis/ccompat/v7
- 
+
+group_id: sensors
+artifact_id: alerts-schema
+
 topic: bronze.sensors.alerts
 producer_error_topic: producer-errors.sensors.alerts
 schema_path: schemas/sensor_alert.avsc

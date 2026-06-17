@@ -42,7 +42,7 @@ def generate_iceberg_ddl(engine: ContractEngine) -> tuple:
         
     # Append operational audit columns used by your streaming engine
     columns_spec.append("  ingested_at TIMESTAMP")
-    columns_spec.append("  schema_version INT")
+    columns_spec.append("  schema_version STRING")
     columns_spec.append("  is_valid BOOLEAN")
     columns_spec.append("  validation_errors ARRAY<STRING>")
     
@@ -77,13 +77,12 @@ def generate_iceberg_ddl(engine: ContractEngine) -> tuple:
     # 2. Build the Quarantine Table Definition
     quarantine_ddl = f"""
     CREATE TABLE IF NOT EXISTS {engine.quarantine_table} (
-      raw_payload STRING,
-      ingested_at TIMESTAMP,
-      schema_version INT,
-      source_format STRING,
-      validation_errors ARRAY<STRING>
-    ) 
-    USING iceberg
+        raw_payload STRING,
+        ingested_at TIMESTAMP,
+        schema_version STRING,
+        source_format STRING,
+        validation_errors ARRAY<STRING>
+    )USING iceberg
     TBLPROPERTIES (
       'write.format.default'='parquet'
     )

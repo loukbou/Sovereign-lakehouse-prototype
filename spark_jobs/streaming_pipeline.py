@@ -67,12 +67,15 @@ def make_batch_processor(engine: ContractEngine, target_schema=None):
                 .withColumn("raw_payload", F.col("value").cast("string"))
                 .withColumn(
                     "parsed_payload",
-                    from_avro(F.col("value"), avro_schema_str)  # ← schema string, no options
+                    from_avro(
+                        F.col("value"),
+                        avro_schema_str,
+                        {"mode": "PERMISSIVE"}   # don't crash on bad records
+                    )
                 )
             )
         validated_df = engine.build_native_validation_df(batch_df, target_schema)
 
-        # ── Step 2: Flatten fields + append audit columns ─────────────────────
         projected = [
             F.col(f"parsed_payload.{f}").alias(f)
             for f in defined_fields
@@ -123,6 +126,9 @@ def make_batch_processor(engine: ContractEngine, target_schema=None):
 def main() -> None:
     # ── Load contract from Apicurio (single HTTP call) ────────────────────────
     engine = ContractEngine.for_topic(KAFKA_TOPIC)
+    print(f"Rules loaded: {len(engine._rules)}")
+    for r in engine._rules:
+        print(f"  - {r.get('name')}: {r.get('expr')}")
 
     print("=" * 60)
     for k, v in engine.summary().items():
@@ -179,7 +185,7 @@ def main() -> None:
         .format("kafka")
         .option("kafka.bootstrap.servers", KAFKA_BROKERS)
         .option("subscribe", KAFKA_TOPIC)
-        .option("startingOffsets", "earliest")
+        .option("startingOffsets", "latest")
         .option("failOnDataLoss", "false")
         .load()
     )

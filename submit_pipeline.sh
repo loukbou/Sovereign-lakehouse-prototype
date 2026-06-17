@@ -7,6 +7,7 @@ docker exec spark-master /opt/spark/bin/spark-submit \
   --master spark://spark-master:7077 \
   --deploy-mode client \
   --name "streaming-${KAFKA_TOPIC}" \
+  --conf spark.jars.ivy=/tmp/.ivy2 \
   --packages org.apache.spark:spark-avro_2.12:3.5.5 \
   --conf spark.executor.memory=1g \
   --conf spark.executor.cores=1 \

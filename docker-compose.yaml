@@ -132,28 +132,12 @@ services:
     volumes:
       - ./producers/configs:/app/configs
       - ./schemas:/app/schemas
+      - ./producers/common:/app/common
     depends_on:
       apicurio:
         condition: service_healthy
       kafka1:
         condition: service_started
-
-  sales-transactions-producer:
-    build:
-      context: .
-      dockerfile: producers/Dockerfile
-    container_name: sales-transactions-producer
-    environment:
-      PRODUCER_CONFIG: configs/sales_transactions.yml
-    volumes:
-      - ./producers/configs:/app/configs
-      - ./schemas:/app/schemas
-    depends_on:
-      apicurio:
-        condition: service_healthy
-      kafka1:
-        condition: service_started
-    restart: unless-stopped
 
 networks:
   lakehouse-net:
