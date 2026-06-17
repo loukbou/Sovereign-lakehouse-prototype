@@ -80,6 +80,7 @@ def generate_iceberg_ddl(engine: ContractEngine) -> tuple:
       raw_payload STRING,
       ingested_at TIMESTAMP,
       schema_version INT,
+      source_format STRING,
       validation_errors ARRAY<STRING>
     ) 
     USING iceberg

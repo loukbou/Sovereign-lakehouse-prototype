@@ -15,32 +15,44 @@ Checkpointing:    Ceph S3 (s3a://) for exactly-once semantics
 
 import os
 from pyspark.sql import SparkSession, functions as F
+from pyspark.sql.avro.functions import from_avro
 
 from contract_engine import ContractEngine
 
 # ── Environment Config ────────────────────────────────────────────────────────
-KAFKA_BROKERS      = os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
+KAFKA_BROKERS      = os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "kafka1:9092")
 KAFKA_TOPIC        = os.environ.get("KAFKA_TOPIC", "bronze.sensors.alerts")
 TRIGGER_INTERVAL   = os.environ.get("TRIGGER_INTERVAL", "30 seconds")
 APICURIO_URL       = os.environ.get("APICURIO_URL", "http://apicurio:8080")
 
 # Avro deserialization options — points Spark's from_avro() to Apicurio
-AVRO_OPTIONS = {
-    "schema.registry.url": APICURIO_URL,
-    "value.subject.name.strategy": "TopicNameStrategy",
-}
+
+
+import requests
+
+def get_avro_schema_str(group_id: str, artifact_id: str) -> str:
+    """Fetch raw Avro schema JSON string from Apicurio."""
+    resp = requests.get(
+        f"{APICURIO_URL}/apis/registry/v3/groups/{group_id}/artifacts/{artifact_id}/versions/branch=latest/content",
+        headers={"Accept": "application/json"},
+        timeout=10,
+    )
+    resp.raise_for_status()
+    return resp.text
+
 
 def make_batch_processor(engine: ContractEngine, target_schema=None):
-    """
-    Build the foreachBatch handler for the given contract.
-    Captured variables are resolved at construction time to avoid
-    serialization issues inside Spark workers.
-    """
-    iceberg_table    = engine.iceberg_table
+    iceberg_table = engine.iceberg_table
     quarantine_table = engine.quarantine_table
-    engine_version   = engine.version
-    format_type      = engine.format
-    defined_fields   = list(engine._fields.keys())
+    engine_version = engine.version
+    format_type = engine.format
+    defined_fields = list(engine._fields.keys())
+
+    # Fetch Avro schema ONCE here, not inside process_batch
+    avro_schema_str = None
+    if format_type == "avro":
+        parts = engine.kafka_topic.split(".")
+        avro_schema_str = get_avro_schema_str(parts[1], f"{parts[2]}-schema")
 
     def process_batch(batch_df, batch_id: int) -> None:
         if batch_df.isEmpty():
@@ -50,16 +62,14 @@ def make_batch_processor(engine: ContractEngine, target_schema=None):
 
         # ── Step 1: Deserialize + validate ────────────────────────────────────
         if format_type == "avro":
-            # Avro bytes → parsed_payload struct via Apicurio Schema Registry
             batch_df = (
                 batch_df
                 .withColumn("raw_payload", F.col("value").cast("string"))
                 .withColumn(
                     "parsed_payload",
-                    F.from_avro(F.col("value"), KAFKA_TOPIC + "-value", AVRO_OPTIONS)
+                    from_avro(F.col("value"), avro_schema_str)  # ← schema string, no options
                 )
             )
-
         validated_df = engine.build_native_validation_df(batch_df, target_schema)
 
         # ── Step 2: Flatten fields + append audit columns ─────────────────────
@@ -158,10 +168,7 @@ def main() -> None:
     )
 
     if engine.format == "avro":
-        builder = builder.config(
-            "spark.jars.packages",
-            "org.apache.spark:spark-avro_2.12:3.4.0"
-        )
+        print("Avro packages resolved via --packages at spark-submit time")
 
     spark = builder.getOrCreate()
     spark.sparkContext.setLogLevel("WARN")
