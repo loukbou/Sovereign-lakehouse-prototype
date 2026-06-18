@@ -8,6 +8,11 @@ services:
       - "19120:19120"
     environment:
       QUARKUS_HTTP_PORT: "19120"
+      QUARKUS_DATASOURCE_DB_KIND: postgresql
+      QUARKUS_DATASOURCE_USERNAME: apicurio
+      QUARKUS_DATASOURCE_PASSWORD: apicurio
+      QUARKUS_DATASOURCE_JDBC_URL: jdbc:postgresql://postgres:5432/nessie
+      NESSIE_VERSION_STORE_TYPE: JDBC2
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:19120/api/v2/config"]
       interval: 10s
@@ -33,6 +38,8 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+    volumes:
+      - kafka_data:/var/lib/kafka/data
 
   kafka-ui:
     image: provectuslabs/kafka-ui:latest
@@ -61,6 +68,8 @@ services:
       timeout: 5s
       retries: 10
       start_period: 10s
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
 
   apicurio:
     image: apicurio/apicurio-registry:3.0.13
@@ -142,3 +151,7 @@ services:
 networks:
   lakehouse-net:
     driver: bridge
+
+volumes:
+  postgres_data:
+  kafka_data:

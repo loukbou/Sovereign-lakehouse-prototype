@@ -1,5 +1,5 @@
 import random
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 
@@ -71,14 +71,20 @@ def generate_alert() -> dict:
         ]),
         "event_time": now_utc_iso(),
     }
-    if random.random() < 0.2:
-        error_type = random.choice(["missing_alert_id", "invalid_severity", "missing_machine_id"])
-        if error_type == "missing_alert_id":
-            payload["alert_id"] = None
-        elif error_type == "invalid_severity":
-            payload["severity"] = "INVALID"
-        elif error_type == "missing_machine_id":
-            payload["machine_id"] = None
+    if random.random() > 0.2:
+        error_type = random.choice([
+            "missing_sensor_id",    # has(sensor_id) rule fires
+            "future_event_time",    # event_time < now() rule fires
+            "empty_sensor_id",      # has(sensor_id) rule fires
+        ])
+        if error_type == "missing_sensor_id":
+            payload["sensor_id"] = ""        # empty string passes Avro, fails has()
+        elif error_type == "future_event_time":
+            payload["event_time"] = (
+                datetime.utcnow() + timedelta(hours=2)
+            ).strftime("%Y-%m-%dT%H:%M:%S.%f+00:00")   # future timestamp, fails not_future rule
+        elif error_type == "empty_sensor_id":
+            payload["sensor_id"] = "   "     # whitespace only, fails has() trim check
     return payload
 
 
