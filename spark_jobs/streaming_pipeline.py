@@ -16,6 +16,7 @@ Checkpointing:    Ceph S3 (s3a://) for exactly-once semantics
 import os
 from pyspark.sql import SparkSession, functions as F
 from pyspark.sql.avro.functions import from_avro
+import time
 
 from contract_engine import ContractEngine
 
@@ -48,19 +49,22 @@ def make_batch_processor(engine: ContractEngine, target_schema=None):
     format_type = engine.format
     defined_fields = list(engine._fields.keys())
 
-    # Fetch Avro schema ONCE here, not inside process_batch
+    # Fetch Avro schema once
     avro_schema_str = None
     if format_type == "avro":
         parts = engine.kafka_topic.split(".")
-        avro_schema_str = get_avro_schema_str(parts[1], f"{parts[2]}-schema")
+        avro_schema_str = get_avro_schema_str(
+            parts[1],
+            f"{parts[2]}-schema"
+        )
 
     def process_batch(batch_df, batch_id: int) -> None:
         if batch_df.isEmpty():
             return
 
         now_ts = F.current_timestamp()
-
-        # ── Step 1: Deserialize + validate ────────────────────────────────────
+        start_time = time.time()
+        # Deserialize
         if format_type == "avro":
             batch_df = (
                 batch_df
@@ -70,40 +74,22 @@ def make_batch_processor(engine: ContractEngine, target_schema=None):
                     from_avro(
                         F.col("value"),
                         avro_schema_str,
-                        {"mode": "PERMISSIVE"}   # don't crash on bad records
+                        {"mode": "PERMISSIVE"}
                     )
                 )
             )
-        validated_df = engine.build_native_validation_df(batch_df, target_schema)
-        # ── TEMPORARY DEBUG: print validation errors breakdown ────────────────
-        debug_df = validated_df.select(
-            F.col("parsed_payload.severity").alias("severity"),
-            F.col("parsed_payload.alert_type").alias("alert_type"),
-            F.col("parsed_payload.sensor_id").alias("sensor_id"),
-            F.col("parsed_payload.event_time").alias("event_time"),
-            F.col("validation_errors"),
-            F.col("is_valid")
+
+        # Validate
+        validated_df = engine.build_native_validation_df(
+            batch_df,
+            target_schema
         )
 
-        print(f"[Batch {batch_id}] === VALIDATION DEBUG ===")
-        debug_df.show(10, truncate=False)
-
-        # Error frequency breakdown — which rules are firing most?
-        print(f"[Batch {batch_id}] === ERROR BREAKDOWN ===")
-        validated_df.select(F.explode(F.col("validation_errors")).alias("error")) \
-            .groupBy("error") \
-            .count() \
-            .orderBy(F.col("count").desc()) \
-            .show(20, truncate=False)
-
-        # Confirm struct vs flat string for severity and alert_type
-        print(f"[Batch {batch_id}] === PARSED_PAYLOAD SCHEMA ===")
-        validated_df.printSchema()
-        # ── END DEBUG ─────────────────────────────────────────────────────────
         projected = [
             F.col(f"parsed_payload.{f}").alias(f)
             for f in defined_fields
         ]
+
         enriched_df = validated_df.select(
             *projected,
             now_ts.alias("ingested_at"),
@@ -114,17 +100,21 @@ def make_batch_processor(engine: ContractEngine, target_schema=None):
             F.col("raw_payload"),
         )
 
-        # ── Step 3: Route valid → Bronze ──────────────────────────────────────
-        valid_df = enriched_df.filter(F.col("is_valid")).drop(
-            "is_valid",
-            "validation_errors",
-            "raw_payload",
-            "key", "value", "topic", "partition", "offset", "timestamp", "timestampType"
+        # Valid → Bronze
+        valid_df = (
+            enriched_df
+            .filter(F.col("is_valid"))
+            .drop(
+                "is_valid",
+                "validation_errors",
+                "raw_payload"
+            )
         )
+
         if not valid_df.isEmpty():
             valid_df.writeTo(iceberg_table).append()
 
-        # ── Step 4: Route invalid → Quarantine ────────────────────────────────
+        # Invalid → Quarantine
         quarantine_df = (
             validated_df
             .filter(~F.col("is_valid"))
@@ -136,20 +126,32 @@ def make_batch_processor(engine: ContractEngine, target_schema=None):
                 F.col("validation_errors"),
             )
         )
+
         if not quarantine_df.isEmpty():
             quarantine_df.writeTo(quarantine_table).append()
+
             print(
-                f"[Batch {batch_id}] ⚠️  {quarantine_df.count()} invalid "
+                f"[Batch {batch_id}] ⚠️ {quarantine_df.count()} invalid "
                 f"→ {quarantine_table}"
             )
 
         total = batch_df.count()
         valid_n = valid_df.count() if not valid_df.isEmpty() else 0
-        inv_n   = quarantine_df.count() if not quarantine_df.isEmpty() else 0
-        print(f"[Batch {batch_id}] Total={total} | Valid={valid_n} | Invalid={inv_n}")
+        invalid_n = quarantine_df.count() if not quarantine_df.isEmpty() else 0
+
+        print(
+            f"[Batch {batch_id}] Total={total} | "
+            f"Valid={valid_n} | Invalid={invalid_n}"
+        )
+        end_time = time.time()
+        duration = end_time - start_time
+
+        print(
+            f"[Batch {batch_id}] "
+            f"Duration={duration:.2f}s"
+        )
 
     return process_batch
-
 
 def main() -> None:
     # ── Load contract from Apicurio (single HTTP call) ────────────────────────

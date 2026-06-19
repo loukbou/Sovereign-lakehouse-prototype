@@ -9,4 +9,5 @@ artifact_id: alerts-schema
 topic: bronze.sensors.alerts
 producer_error_topic: producer-errors.sensors.alerts
 schema_path: schemas/sensor_alert.avsc
-sleep_seconds: 3
+sleep_seconds: 0
+n_records: 10000

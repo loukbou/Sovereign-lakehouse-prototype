@@ -71,7 +71,7 @@ def generate_alert() -> dict:
         ]),
         "event_time": now_utc_iso(),
     }
-    if random.random() > 0.2:
+    if random.random() < 0.2:
         error_type = random.choice([
             "missing_sensor_id",    # has(sensor_id) rule fires
             "future_event_time",    # event_time < now() rule fires
