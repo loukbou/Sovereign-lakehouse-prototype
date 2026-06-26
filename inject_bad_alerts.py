@@ -2,13 +2,17 @@ import uuid
 import json
 import requests
 from datetime import datetime, timedelta, timezone
+import random
 
 KAFKA_BOOTSTRAP = "kafka1:9092"
 TOPIC           = "bronze.sensors.alerts"
 APICURIO_URL    = "http://apicurio:8080"
 ARTIFACT_GROUP  = "sensors"
 ARTIFACT_ID     = "alerts-schema"
-NUM_RECORDS     = 100
+NUM_RECORDS     = 10000
+n_completeness = int(NUM_RECORDS * 0.10)
+n_timeliness   = int(NUM_RECORDS * 0.10)
+n_duplicates   = int(NUM_RECORDS * 0.15)
 
 def fetch_schema():
     url = (
@@ -36,35 +40,77 @@ def avro_encode(schema_str, record):
     return serializer(record, SerializationContext(TOPIC, MessageField.VALUE))
 
 def build_bad_records():
-    future = (datetime.now(timezone.utc) + timedelta(hours=3)).strftime(
+
+    records = []
+
+    now = datetime.now(timezone.utc).strftime(
         "%Y-%m-%dT%H:%M:%S.%f+00:00"
     )
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f+00:00")
-    records = []
-    for i in range(NUM_RECORDS):
-        if i % 2 == 0:
-            # Empty sensor_id — valid Avro string, breaks has(sensor_id)
-            records.append({
-                "alert_id":   str(uuid.uuid4()),
-                "sensor_id":  "",                   # NOT_EMPTY_VIOLATION
-                "machine_id": str(uuid.uuid4()),
-                "severity":   "WARNING",
-                "alert_type": "OVERHEATING",
-                "event_time": now,
-            })
-        else:
-            # Future timestamp — valid Avro string, breaks event_time < now()
-            records.append({
-                "alert_id":   str(uuid.uuid4()),
-                "sensor_id":  str(uuid.uuid4()),
-                "machine_id": str(uuid.uuid4()),
-                "severity":   "CRITICAL",
-                "alert_type": "POWER_FAILURE",
-                "event_time": future,               # NOT_FUTURE_VIOLATION
-            })
-    return records
 
+    future = (
+        datetime.now(timezone.utc) + timedelta(hours=3)
+    ).strftime(
+        "%Y-%m-%dT%H:%M:%S.%f+00:00"
+    )
+
+    for _ in range(NUM_RECORDS):
+        records.append({
+            "alert_id": str(uuid.uuid4()),
+            "sensor_id": str(uuid.uuid4()),
+            "machine_id": str(uuid.uuid4()),
+            "severity": "WARNING",
+            "alert_type": "OVERHEATING",
+            "event_time": now,
+        })
+
+    # 10% missing sensor_id
+    for idx in random.sample(range(NUM_RECORDS),  n_completeness):
+        records[idx]["sensor_id"] = ""
+
+    # 10% future timestamps
+    remaining = [i for i in range(NUM_RECORDS) if records[i]["sensor_id"] != ""]
+    for idx in random.sample(remaining, n_timeliness):
+        records[idx]["event_time"] = future
+
+
+    # Select records that will become duplicates
+    duplicate_targets = random.sample(
+        range(NUM_RECORDS),
+        n_duplicates
+    )
+
+    # Select unique source records
+    duplicate_sources = random.sample(
+        [i for i in range(NUM_RECORDS) if i not in duplicate_targets],
+        n_duplicates
+    )
+
+    for src, dst in zip(duplicate_sources, duplicate_targets):
+        records[dst]["alert_id"] = records[src]["alert_id"]
+    from collections import Counter
+
+    counts = Counter(r["alert_id"] for r in records)
+
+    distinct_ids = len(counts)
+    uniqueness_pct = round(distinct_ids * 100 / len(records), 2)
+
+    print("\n=== PRODUCER DATASET STATS ===")
+    print(f"Total records      : {len(records)}")
+    print(f"Distinct alert IDs : {distinct_ids}")
+    print(f"Uniqueness (%)     : {uniqueness_pct}")
+
+    print("\nTop duplicates:")
+    for aid, cnt in counts.most_common(10):
+        if cnt > 1:
+            print(aid, cnt)
+
+    return records
 def produce(schema_str, records):
+    print("\n=== EXPECTED QUALITY PROFILE ===")
+    print(f"Total Records            : {NUM_RECORDS}")
+    print(f"Completeness Violations  : {n_completeness}")
+    print(f"Timeliness Violations    : {n_timeliness}")
+    print(f"Duplicate Records        : {n_duplicates}")
     from confluent_kafka import Producer
     p = Producer({"bootstrap.servers": KAFKA_BOOTSTRAP})
     ok = 0
@@ -78,9 +124,9 @@ def produce(schema_str, records):
             print(f"[SKIP] {e}")
     p.flush()
     print(f"\nInjected {ok}/{len(records)} bad records into {TOPIC}")
-    print("  50x empty sensor_id   -> NOT_EMPTY_VIOLATION")
-    print("  50x future event_time -> NOT_FUTURE_VIOLATION")
-    print("  Wait ~30s for Spark batch to route them to quarantine.\n")
+    print(f"  {n_completeness}x empty sensor_id")
+    print(f"  {n_timeliness}x future event_time")
+    print(f"  {n_duplicates}x duplicate alert_id")
 
 if __name__ == "__main__":
     print(f"Fetching schema from Apicurio ({ARTIFACT_GROUP}/{ARTIFACT_ID})...")
